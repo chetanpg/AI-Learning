@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 from classes.insert_embedding import SentenceTransformerInserter, LangChainInserter
-from classes.vector_search import SentenceTransformerVectorSearch,LangChainVectorSearch,LangChainOpenAIEmbeddingVectorSearch
+from classes.vector_search import SentenceTransformerVectorSearch,LangChainOpenAIEmbeddingVectorSearch,LangChainOpenAIEmbeddingVectorSearchnNew
 from classes.chatbot import Chatbot
 import warnings
 from langchain_openai import OpenAI
@@ -61,17 +61,21 @@ def llm_function(query, search_results,openai_api_key,method):
     :param vector_store: The vector store used for retrieval.
     :return: LLM response as a formatted string.
     """
-    #return("enter LLM")
-
+    
     # Initialize OpenAI LLM
     llm = OpenAI(openai_api_key=openai_api_key, temperature=0)
 
     # Format search results for LLM
     try:
-        print("Search Results:", search_results)
-
+        
+        # Debugging: Print the structure of search_results
+        #print("Search Results:", search_results)
+        #for i, doc in enumerate(search_results):
+        #   print(f"Element {i}: {doc}, Type: {type(doc)}")
+        
         # Conditional logic for key access based on vector search type
         if method == "langchain":
+            #formatted_results = search_results.get("result", "No result found")
             formatted_results = "\n".join([doc["text"] for doc in search_results])  # Access 'text' key
         elif method  == "sentence_transformer":
             formatted_results = "\n".join([doc["statement"] for doc in search_results])  # Access 'statement' key
@@ -139,7 +143,12 @@ def main():
         
         # Initialize vector store for SentenceTransformer
         #vector_store = LangChainVectorSearch(mongo_uri, database_name, collection_name,openai_api_key)
+        
+        #Invoke this method to test raw $vectorsearch pipeline. I get better returl in this method copare to langchain retirver and chain.run code 
         vector_store = LangChainOpenAIEmbeddingVectorSearch(mongo_uri, database_name, collection_name,openai_api_key)
+
+        #Invoke this method if you want to do vector search and LLM retrival both using langchain instead of using $vectorsearch for vector query. 
+        #vector_store = LangChainOpenAIEmbeddingVectorSearchnNew(mongo_uri, database_name, collection_name,openai_api_key,vector_index_name="vector_index")
         vector_store.connect()
         
         # Precompute search results

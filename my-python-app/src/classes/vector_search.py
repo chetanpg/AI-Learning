@@ -5,7 +5,11 @@ from pymongo import MongoClient
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import MongoDBAtlasVectorSearch
 from langchain.document_loaders import DirectoryLoader
+from langchain.vectorstores import MongoDBAtlasVectorSearch
+from langchain.chains import RetrievalQA
+from langchain.llms import OpenAI
 
+#Embedding used is SentenceTransformer('all-MiniLM-L6-v2') for SentenceTransformerVectorSearch
 class SentenceTransformerVectorSearch:
     def __init__(self, mongo_uri, database_name, collection_name):
         self.connection_string = mongo_uri
@@ -68,84 +72,8 @@ class SentenceTransformerVectorSearch:
 
     def close_connection(self):
         self.mongo_connector.close_connection()
-
-class LangChainVectorSearch:
-    def __init__(self, mongo_uri, database_name, collection_name, openai_api_key):
-        """
-        Initialize LangChain-based vector search.
-        :param connection_string: MongoDB connection string.
-        :param database_name: Name of the database.
-        :param collection_name: Name of the collection.
-        :param openai_api_key: OpenAI API key for embeddings.
-        """
-        self.mongo_uri = mongo_uri
-        self.database_name = database_name
-        self.collection_name = collection_name
-        self.openai_api_key = openai_api_key
-
-        # Initialize MongoDB client and collection 
-        self.mongo_connector = MongoDBConnector(mongo_uri, database_name, max_pool_size=10)
-        
-        # Initialize OpenAI embeddings
-        self.embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
-
-
-    def connect(self):
-        """
-        Connect to MongoDB.
-        """
-        self.mongo_connector.connect()
-        print("Connected to MongoDB using LangChain!")
-        # Inspect embeddings after connection
-        self.inspect_embeddings()
-
-    def inspect_embeddings(self):
-        """
-        Inspect stored embeddings in MongoDB.
-        """
-        print("inspect embedding in collection")    
-        collection = self.mongo_connector.get_collection(self.collection_name)
-        documents = collection.find()
-        for doc in documents:
-            print(doc)  # Print each document to verify embeddings
-
-    def search(self, query, k=1):
-        """
-        Perform vector search using LangChain's VectorStore.
-        :param query: The search query.
-        :param k: Number of most similar documents to retrieve.
-        :return: The most similar documents.
-        """
-        # Get the collection
-        self.collection = self.mongo_connector.get_collection(self.collection_name)
-        if self.collection is None:
-            raise ValueError(f"Collection '{self.collection_name}' does not exist.")
-        
-        # Initialize the VectorStore
-        self.vector_store = MongoDBAtlasVectorSearch(self.collection, self.embeddings)
-        if self.vector_store is None: 
-            raise ValueError("Failed to initialize MongoDBAtlasVectorSearch. Check your connection and collection.")
-        print("VectorStore initialized successfully!")
-
-        # Perform similarity search
-        print(f"Performing similarity search for query: '{query}'")
-        docs = self.vector_store.similarity_search(query, k=k)
-
-        # Check if any documents were found
-        if not docs:
-          print("No results found. Debugging similarity search...")
-          print(f"Query: {query}")
-          print(f"Query Embedding: {self.embeddings.embed_query(query)}")
-          print(f"Collection: {self.collection_name}")
-          return []
-        else:
-          print(f"Results: {docs}")
-
-        # Extract page content from the documents
-        results = [doc.page_content for doc in docs]
-        #print(f"Search results: {results}")
-        return results
     
+#Vector search is using raw MongoDB $vectorsearch pipeline
 class LangChainOpenAIEmbeddingVectorSearch:
     def __init__(self, mongo_uri, database_name, collection_name, openai_api_key):
         """
@@ -218,3 +146,73 @@ class LangChainOpenAIEmbeddingVectorSearch:
     
     def close_connection(self):
         self.mongo_connector.close_connection()
+
+#Using langchain vector search methos instead of raw $vectorsearch in the mongodb pipeline 
+class LangChainOpenAIEmbeddingVectorSearchnNew:
+    def __init__(self, mongo_uri, database_name, collection_name, openai_api_key, vector_index_name):
+        """
+        Initialize LangChain-based vector search with RAG pipeline.
+        :param mongo_uri: MongoDB connection string.
+        :param database_name: Name of the database.
+        :param collection_name: Name of the collection.
+        :param openai_api_key: OpenAI API key for embeddings and LLM.
+        :param vector_index_name: Name of the vector index in MongoDB.
+        """
+        self.mongo_uri = mongo_uri
+        self.database_name = database_name
+        self.collection_name = collection_name
+        self.openai_api_key = openai_api_key
+        self.vector_index_name = vector_index_name
+        self.vector_store = None
+        self.retriever = None
+        self.rag_chain = None
+
+    def connect(self):
+        """
+        Connect to MongoDB Atlas and initialize the vector store, retriever, and RAG chain.
+        """
+        # Step 1: Initialize OpenAI embeddings
+        embeddings = OpenAIEmbeddings(openai_api_key=self.openai_api_key)
+
+        # Step 2: Create a vector store in MongoDB Atlas
+        self.vector_store = MongoDBAtlasVectorSearch.from_connection_string(
+            self.mongo_uri,
+            f"{self.database_name}.{self.collection_name}",
+            embeddings,
+            index_name=self.vector_index_name
+        )
+        if self.vector_store is None:
+            raise ValueError("Failed to initialize MongoDBAtlasVectorSearch. Check your connection and collection.")
+        else:
+            print("Vector store initialized successfully!")
+        # Ensure the vector store is connected
+
+        # Step 3: Define a retriever for searching relevant data in the vector store
+        self.retriever = self.vector_store.as_retriever(search_type="similarity", k=2)
+        print("Retriever initialized successfully.")
+
+        # Step 4: Build a Retrieval-Augmented Generation (RAG) pipeline
+        llm = OpenAI(openai_api_key=self.openai_api_key, temperature=0)
+        self.rag_chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            retriever=self.retriever,
+            return_source_documents=True
+        )
+        print("RAG pipeline initialized successfully.")
+
+    def search(self, query):
+        """
+        Perform a search using the RAG pipeline.
+        :param query: The user query.
+        :return: The response generated by the RAG pipeline.
+        """
+        if self.rag_chain is None:
+            raise ValueError("RAG pipeline is not initialized. Ensure connect() was called successfully.")
+
+        # Step 5: Execute the RAG pipeline
+        print(f"Executing RAG pipeline for query: '{query}'")
+        result = self.rag_chain.invoke(query)
+
+        # Step 6: Return the response
+        print(f"RAG pipeline response: {result['result']}")
+        return result
